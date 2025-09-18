@@ -10,3 +10,11 @@ nltk
 scipy
 python-telegram-bot
 python-dotenv
+aiosqlite
+websockets
+httpx
+feedparser
+pandas
+pandas-ta
+python-telegram-bot
+binance-connector
