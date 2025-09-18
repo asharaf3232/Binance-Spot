@@ -11,5 +11,3 @@ services:
       - OKX_API_PASSPHRASE=${AHMED_OKX_API_PASSPHRASE}
       - TELEGRAM_BOT_TOKEN=${AHMED_TELEGRAM_BOT_TOKEN}
       - TELEGRAM_CHAT_ID=${AHMED_TELEGRAM_CHAT_ID}
-    volumes:
-      - ./users/ahmed/data:/app
