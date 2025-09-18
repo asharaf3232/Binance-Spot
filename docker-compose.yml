@@ -1,0 +1,11 @@
+version: '3.8'
+
+services:
+  ahmed_bot:
+    build: .
+    container_name: ahmed_okx_bot
+    restart: unless-stopped
+    env_file:
+      - ./users/ahmed/ahmed.env
+    volumes:
+      - ./users/ahmed/data:/app
