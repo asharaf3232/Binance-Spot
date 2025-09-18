@@ -1,0 +1,12 @@
+aiosqlite
+websockets
+httpx
+feedparser
+pandas
+pandas-ta
+ccxt
+binance-connector
+nltk
+scipy
+python-telegram-bot
+python-dotenv
