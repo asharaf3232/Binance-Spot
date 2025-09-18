@@ -1,0 +1,22 @@
+name: Deploy Binance Spot Bot
+
+on:
+  push:
+    branches:
+      - main  # أو master حسب اسم الفرع الرئيسي لديك
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy to Server
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            cd ${{ secrets.PROJECT_PATH }}
+            git pull origin main
+            echo "Code updated successfully."
+            pm2 restart Binance-Spot-Bot
