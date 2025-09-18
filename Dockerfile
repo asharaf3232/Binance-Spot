@@ -7,8 +7,8 @@ WORKDIR /app
 # Copy the requirements file
 COPY requirements.txt .
 
-# Install necessary system libraries and Python packages
-RUN apt-get update && apt-get install -y --no-install-recommends gcc && \
+# Install more robust build tools and then Python packages
+RUN apt-get update && apt-get install -y --no-install-recommends build-essential && \
     pip install --no-cache-dir -r requirements.txt
 
 # Copy the rest of the application code
