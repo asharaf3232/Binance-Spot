@@ -788,72 +788,108 @@ async def get_binance_markets(): # Renamed from get_okx_markets
 async def worker(queue, signals_list, errors_list):
     settings, exchange = bot_data.settings, bot_data.exchange
     while not queue.empty():
-        market = await queue.get(); symbol = market['symbol']
+        market = await queue.get()
+        symbol = market['symbol']
         try:
+            # --- فلتر السيولة المبدئي (السبريد) ---
             try:
                 orderbook = await exchange.fetch_order_book(symbol, limit=1)
                 best_bid, best_ask = orderbook['bids'][0][0], orderbook['asks'][0][0]
-                if best_bid <= 0: continue
+                if best_bid <= 0:
+                    continue  # تجاهل العملات ذات السعر غير الصالح
                 spread_percent = ((best_ask - best_bid) / best_bid) * 100
-                if spread_percent > settings.get('spread_filter', {}).get('max_spread_percent', 0.5): continue
-            except Exception: continue
-            
+                if spread_percent > settings.get('spread_filter', {}).get('max_spread_percent', 0.5):
+                    continue # تجاهل العملات ذات السبريد العالي
+            except Exception:
+                continue # تجاهل إذا فشل جلب دفتر الأوامر
+
+            # --- جلب البيانات التاريخية والتحقق من جودتها ---
             ohlcv = await exchange.fetch_ohlcv(symbol, TIMEFRAME, limit=220)
+            
+            # ✅ **تصحيح مهم:** التحقق من جودة وكمية البيانات قبل المتابعة
+            # هذا يمنع أخطاء التحليل ويصلح مشكلة تحذير VWAP
+            required_candles = settings.get('trend_filters', {}).get('ema_period', 200) + 20
+            if not ohlcv or len(ohlcv) < required_candles:
+                logger.debug(f"Skipping {symbol} due to insufficient historical data.")
+                continue
+
+            # --- إعداد DataFrame (مرة واحدة) ---
+            df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+            df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+            df = df.set_index('timestamp').sort_index() # هذا السطر يضمن ترتيب البيانات زمنيًا
+
+            # --- فلتر الاتجاه العام (Trend Filter) ---
             if settings.get('trend_filters', {}).get('enabled', True):
                 ema_period = settings.get('trend_filters', {}).get('ema_period', 200)
-                if len(ohlcv) < ema_period + 1: continue
-                df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-                df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
-                df = df.set_index('timestamp').sort_index()
                 df.ta.ema(length=ema_period, append=True)
                 ema_col_name = find_col(df.columns, f"EMA_{ema_period}")
-                if not ema_col_name or pd.isna(df[ema_col_name].iloc[-2]): continue
-                if df['close'].iloc[-2] < df[ema_col_name].iloc[-2]: continue
-            else:
-                df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-                df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
-                df = df.set_index('timestamp').sort_index()
-            
+                if not ema_col_name or pd.isna(df[ema_col_name].iloc[-2]):
+                    continue
+                if df['close'].iloc[-2] < df[ema_col_name].iloc[-2]:
+                    continue # السعر تحت المتوسط المتحرك، تجاهل الإشارة الشرائية
+
+            # --- فلتر التقلبات (Volatility Filter) ---
             vol_filters = settings.get('volatility_filters', {})
-            atr_period, min_atr_percent = vol_filters.get('atr_period_for_filter', 14), vol_filters.get('min_atr_percent', 0.8)
+            atr_period = vol_filters.get('atr_period_for_filter', 14)
+            min_atr_percent = vol_filters.get('min_atr_percent', 0.8)
             df.ta.atr(length=atr_period, append=True)
             atr_col_name = find_col(df.columns, f"ATRr_{atr_period}")
-            if not atr_col_name or pd.isna(df[atr_col_name].iloc[-2]): continue
+            if not atr_col_name or pd.isna(df[atr_col_name].iloc[-2]):
+                continue
             last_close = df['close'].iloc[-2]
             atr_percent = (df[atr_col_name].iloc[-2] / last_close) * 100 if last_close > 0 else 0
-            if atr_percent < min_atr_percent: continue
+            if atr_percent < min_atr_percent:
+                continue # تقلبات السعر منخفضة جدًا، تجاهل
 
+            # --- فلتر الحجم النسبي (Relative Volume Filter) ---
             df['volume_sma'] = ta.sma(df['volume'], length=20)
-            if pd.isna(df['volume_sma'].iloc[-2]) or df['volume_sma'].iloc[-2] == 0: continue
+            if pd.isna(df['volume_sma'].iloc[-2]) or df['volume_sma'].iloc[-2] == 0:
+                continue
             rvol = df['volume'].iloc[-2] / df['volume_sma'].iloc[-2]
-            if rvol < settings['liquidity_filters']['min_rvol']: continue
+            if rvol < settings['liquidity_filters']['min_rvol']:
+                continue # حجم التداول الحالي ليس قويًا بما فيه الكفاية
 
+            # --- فلتر قوة الاتجاه (ADX Filter) ---
             adx_value = 0
             if settings.get('adx_filter_enabled', False):
-                df.ta.adx(append=True); adx_col = find_col(df.columns, "ADX_")
+                df.ta.adx(append=True)
+                adx_col = find_col(df.columns, "ADX_")
                 adx_value = df[adx_col].iloc[-2] if adx_col and pd.notna(df[adx_col].iloc[-2]) else 0
-                if adx_value < settings.get('adx_filter_level', 25): continue
-            
+                if adx_value < settings.get('adx_filter_level', 25):
+                    continue # الاتجاه الحالي ليس قويًا بما فيه الكفاية
+
+            # --- تشغيل استراتيجيات التحليل (Scanners) ---
             confirmed_reasons = []
             for name in settings['active_scanners']:
-                if not (strategy_func := SCANNERS.get(name)): continue
+                if not (strategy_func := SCANNERS.get(name)):
+                    continue
                 params = settings.get(name, {})
                 func_args = {'df': df.copy(), 'params': params, 'rvol': rvol, 'adx_value': adx_value}
                 if name in ['support_rebound', 'whale_radar']:
                     func_args.update({'exchange': exchange, 'symbol': symbol})
+                
                 result = await strategy_func(**func_args) if asyncio.iscoroutinefunction(strategy_func) else strategy_func(**{k: v for k, v in func_args.items() if k not in ['exchange', 'symbol']})
-                if result: confirmed_reasons.append(result['reason'])
+                if result:
+                    confirmed_reasons.append(result['reason'])
 
+            # --- توليد الإشارة النهائية إذا تم العثور على أسباب ---
             if confirmed_reasons:
-                reason_str, strength = ' + '.join(set(confirmed_reasons)), len(set(confirmed_reasons))
+                reason_str = ' + '.join(set(confirmed_reasons))
+                strength = len(set(confirmed_reasons))
                 entry_price = df.iloc[-2]['close']
                 df.ta.atr(length=14, append=True)
                 atr = df.iloc[-2].get(find_col(df.columns, "ATRr_14"), 0)
                 risk = atr * settings['atr_sl_multiplier']
-                stop_loss, take_profit = entry_price - risk, entry_price + (risk * settings['risk_reward_ratio'])
+                stop_loss = entry_price - risk
+                take_profit = entry_price + (risk * settings['risk_reward_ratio'])
                 signals_list.append({"symbol": symbol, "entry_price": entry_price, "take_profit": take_profit, "stop_loss": stop_loss, "reason": reason_str, "strength": strength})
-        except Exception as e: logger.debug(f"Worker error for {symbol}: {e}"); errors_list.append(symbol)
-        finally: queue.task_done()
+
+        except Exception as e:
+            logger.debug(f"Worker error for {symbol}: {e}")
+            errors_list.append(symbol)
+        finally:
+            # ✅ **تصحيح مهم:** ضمان أن المهمة تُعلَّم كـ "منتهية" دائمًا
+            queue.task_done()
 
 async def initiate_real_trade(signal):
     if not bot_data.trading_enabled:
