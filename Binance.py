@@ -1,17 +1,15 @@
 # -*- coding: utf-8 -*-
 # =======================================================================================
-# --- 🚀 Binance Mastermind Trader v31.2 (Phoenix Edition - Bugfix) 🚀 ---
+# --- 🚀 Binance Mastermind Trader v31.3 (Phoenix Edition - Filter Tuning) 🚀 ---
 # =======================================================================================
 #
-# هذا الإصدار يركز على إصلاح المشاكل المبلغ عنها في واجهة المستخدم وعمليات الفحص.
-# تم إجراء تحسينات لضمان عمل أزرار لوحة التحكم بشكل صحيح وتحسين وظائف فحص العملات وعرض المحفظة.
+# هذا الإصدار يركز على تعديل فلاتر التحليل لحل مشكلة عدم العثور على صفقات تداول.
+# تم تخفيف الفلاتر الرئيسية لزيادة احتمالية العثور على إشارات مع الحفاظ على جودة التحليل.
 #
-# --- Phoenix Edition Changelog v31.2 (Bugfix & UI Refinement) ---
-#   ✅ [واجهة المستخدم] تحديث أزرار لوحة التحكم لضمان التوافق مع CallbackQueryHandler.
-#   ✅ [الفحص] تحسين رسائل الخطأ في وظيفة 'worker' لتحديد العملات التي تفشل في التحليل.
-#   ✅ [الفحص] مراجعة فلاتر السيولة والتأكد من أنها لا تستبعد جميع العملات.
-#   ✅ [المحفظة] إضافة معالجة أفضل للخطأ في وظيفة عرض المحفظة ('show_portfolio_command').
-#   ✅ [التأكيد] مراجعة جميع وظائف CallbackQueryHandler لضمان سلاسة التنقل.
+# --- Phoenix Edition Changelog v31.3 (Filter Tuning) ---
+#   ✅ [الفحص] زيادة عدد العملات المفحوصة من 300 إلى 500.
+#   ✅ [الفلاتر] تخفيف فلتر السيولة (min_quote_volume_24h_usd) و (min_rvol).
+#   ✅ [التشخيص] إضافة المزيد من سجلات (logs) في وظيفة الفحص لتحديد سبب تجاهل العملات.
 #
 # =======================================================================================
 
@@ -146,7 +144,7 @@ trade_management_lock = asyncio.Lock()
 DEFAULT_SETTINGS = {
     "real_trade_size_usdt": 15.0,
     "max_concurrent_trades": 5,
-    "top_n_symbols_by_volume": 300,
+    "top_n_symbols_by_volume": 500, # Increased from 300
     "worker_threads": 10,
     "atr_sl_multiplier": 2.5,
     "risk_reward_ratio": 2.0,
@@ -161,7 +159,7 @@ DEFAULT_SETTINGS = {
     "btc_trend_filter_enabled": True,
     "news_filter_enabled": True,
     "asset_blacklist": ["USDC", "DAI", "TUSD", "FDUSD", "USDD", "PYUSD", "USDT", "BNB", "BTC", "ETH"], # Removed exchange tokens
-    "liquidity_filters": {"min_quote_volume_24h_usd": 1000000, "min_rvol": 1.5},
+    "liquidity_filters": {"min_quote_volume_24h_usd": 500000, "min_rvol": 1.0}, # Relaxed from 1M and 1.5
     "volatility_filters": {"atr_period_for_filter": 14, "min_atr_percent": 0.8},
     "trend_filters": {"ema_period": 200, "htf_period": 50, "enabled": True},
     "spread_filter": {"max_spread_percent": 0.5},
@@ -982,7 +980,7 @@ async def check_time_sync(context: ContextTypes.DEFAULT_TYPE):
 # =======================================================================================
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [["Dashboard 🖥️"], ["الإعدادات ⚙️"]]
-    await update.message.reply_text("أهلاً بك في **Binance Mastermind Trader v31.2 (Phoenix Edition)**", reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True), parse_mode=ParseMode.MARKDOWN)
+    await update.message.reply_text("أهلاً بك في **Binance Mastermind Trader v31.3 (Phoenix Edition)**", reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True), parse_mode=ParseMode.MARKDOWN)
 
 async def manual_scan_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not bot_data.trading_enabled: await (update.message or update.callback_query.message).reply_text("🔬 الفحص محظور. مفتاح الإيقاف مفعل."); return
@@ -1103,7 +1101,7 @@ async def show_mood_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     mood = await mood_task
     all_markets = await markets_task
     translated_headlines, translation_success = await translate_text_gemini(original_headlines)
-    news_sentiment, _ = analyze_sentiment_of_headlines(original_headlines)
+    news_sentiment, _ = analyze_sentiment_of_headlines(translated_headlines)
     top_gainers, top_losers = [], []
     if all_markets:
         sorted_by_change = sorted([m for m in all_markets if m.get('percentage') is not None], key=lambda m: m['percentage'], reverse=True)
@@ -1560,7 +1558,7 @@ async def post_init(application: Application):
     jq.run_repeating(check_time_sync, interval=TIME_SYNC_INTERVAL_SECONDS, first=TIME_SYNC_INTERVAL_SECONDS, name="time_sync_job")
     jq.run_daily(send_daily_report, time=dt_time(hour=23, minute=55, tzinfo=EGYPT_TZ), name='daily_report')
     logger.info(f"Jobs scheduled. Daily report at 23:55.")
-    try: await application.bot.send_message(TELEGRAM_CHAT_ID, "*🚀 Binance Mastermind Trader v31.2 (Phoenix Edition) بدأ العمل...*", parse_mode=ParseMode.MARKDOWN)
+    try: await application.bot.send_message(TELEGRAM_CHAT_ID, "*🚀 Binance Mastermind Trader v31.3 (Phoenix Edition) بدأ العمل...*", parse_mode=ParseMode.MARKDOWN)
     except Forbidden: logger.critical(f"FATAL: Bot not authorized for chat ID {TELEGRAM_CHAT_ID}."); return
     logger.info("--- Phoenix Engine (Binance Edition) is now fully operational ---")
 
@@ -1573,7 +1571,7 @@ async def post_shutdown(application: Application):
     logger.info("Bot has shut down.")
 
 def main():
-    logger.info("--- Starting Binance Mastermind Trader v31.2 (Phoenix Edition) ---")
+    logger.info("--- Starting Binance Mastermind Trader v31.3 (Phoenix Edition) ---")
     load_settings(); asyncio.run(init_database())
     app_builder = Application.builder().token(TELEGRAM_BOT_TOKEN)
     app_builder.post_init(post_init).post_shutdown(post_shutdown)
