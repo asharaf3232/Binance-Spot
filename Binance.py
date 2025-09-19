@@ -1,25 +1,17 @@
 # -*- coding: utf-8 -*-
 # =======================================================================================
-# --- 🚀 Binance Mastermind Trader v31.1 (Phoenix Edition - Refined) 🚀 ---
+# --- 🚀 Binance Mastermind Trader v31.2 (Phoenix Edition - Bugfix) 🚀 ---
 # =======================================================================================
 #
-# هذا الإصدار ينهض من رماد المحاولات السابقة كبوت موحد وخارق.
-# تم تعديله جراحياً لاستبدال جسد التداول الخاص بـ OKX بآخر متوافق بالكام
-# مع Binance، مع الحفاظ على العقل التحليلي فائق الذكاء.
+# هذا الإصدار يركز على إصلاح المشاكل المبلغ عنها في واجهة المستخدم وعمليات الفحص.
+# تم إجراء تحسينات لضمان عمل أزرار لوحة التحكم بشكل صحيح وتحسين وظائف فحص العملات وعرض المحفظة.
 #
-# --- Phoenix Edition Changelog v31.1 (Binance Integration Refined) ---
-#   ✅ [التبديل الأساسي] تم استبدال جميع مكونات التداول الحقيقي من OKX إلى Binance.
-#   ✅ [الاتصال] استخدام `ccxt` للاتصال بـ Binance Spot مع تحديد `defaultType='spot'` لضمان التنفيذ الصحيح.
-#   ✅ [السرعة] استبدال `PublicWebSocketManager` بـ `BinancePublicWS` باستخدام `binance-connector`
-#      للاشتراك في ستريم `!bookTicker@arr` للحصول على أسعار لحظية بزمن وصول منخفض (استخدام سعر المنتصف).
-#   ✅ [السرعة] استبدال `PrivateWebSocketManager` بـ `BinancePrivateWS` باستخدام `binance-connector`
-#      للاشتراك في `User Data Stream` وتفعيل الصفقات فوراً عند التعبئة الكاملة (FILLED executionReport).
-#   ✅ [التوافق] تعديل وظائف إدارة الصفقات (`_close_trade`, `TradeGuardian`) لتكون متوافقة مع Binance API.
-#   ✅ [التحسين] توحيد صيغة الرموز (e.g., 'BTC/USDT') في جميع أنحاء التطبيق باستخدام دالة مساعدة.
-#   ✅ [التحسين] تحديث أسماء المتغيرات والتعليقات لتعكس الانتقال الكامل إلى Binance.
-#
-# --- ⚠️ متطلبات جديدة ⚠️ ---
-#   pip install scipy feedparser nltk python-binance binance-connector
+# --- Phoenix Edition Changelog v31.2 (Bugfix & UI Refinement) ---
+#   ✅ [واجهة المستخدم] تحديث أزرار لوحة التحكم لضمان التوافق مع CallbackQueryHandler.
+#   ✅ [الفحص] تحسين رسائل الخطأ في وظيفة 'worker' لتحديد العملات التي تفشل في التحليل.
+#   ✅ [الفحص] مراجعة فلاتر السيولة والتأكد من أنها لا تستبعد جميع العملات.
+#   ✅ [المحفظة] إضافة معالجة أفضل للخطأ في وظيفة عرض المحفظة ('show_portfolio_command').
+#   ✅ [التأكيد] مراجعة جميع وظائف CallbackQueryHandler لضمان سلاسة التنقل.
 #
 # =======================================================================================
 
@@ -796,11 +788,14 @@ async def worker(queue, signals_list, errors_list):
                 orderbook = await exchange.fetch_order_book(symbol, limit=1)
                 best_bid, best_ask = orderbook['bids'][0][0], orderbook['asks'][0][0]
                 if best_bid <= 0:
+                    logger.debug(f"Skipping {symbol}: Invalid bid price.")
                     continue  # تجاهل العملات ذات السعر غير الصالح
                 spread_percent = ((best_ask - best_bid) / best_bid) * 100
                 if spread_percent > settings.get('spread_filter', {}).get('max_spread_percent', 0.5):
+                    logger.debug(f"Skipping {symbol}: Spread too high ({spread_percent:.2f}%).")
                     continue # تجاهل العملات ذات السبريد العالي
             except Exception:
+                logger.debug(f"Skipping {symbol}: Failed to fetch order book.")
                 continue # تجاهل إذا فشل جلب دفتر الأوامر
 
             # --- جلب البيانات التاريخية والتحقق من جودتها ---
@@ -824,8 +819,10 @@ async def worker(queue, signals_list, errors_list):
                 df.ta.ema(length=ema_period, append=True)
                 ema_col_name = find_col(df.columns, f"EMA_{ema_period}")
                 if not ema_col_name or pd.isna(df[ema_col_name].iloc[-2]):
+                    logger.debug(f"Skipping {symbol}: Trend EMA is not available.")
                     continue
                 if df['close'].iloc[-2] < df[ema_col_name].iloc[-2]:
+                    logger.debug(f"Skipping {symbol}: Price is below trend EMA.")
                     continue # السعر تحت المتوسط المتحرك، تجاهل الإشارة الشرائية
 
             # --- فلتر التقلبات (Volatility Filter) ---
@@ -835,18 +832,22 @@ async def worker(queue, signals_list, errors_list):
             df.ta.atr(length=atr_period, append=True)
             atr_col_name = find_col(df.columns, f"ATRr_{atr_period}")
             if not atr_col_name or pd.isna(df[atr_col_name].iloc[-2]):
+                logger.debug(f"Skipping {symbol}: ATR is not available.")
                 continue
             last_close = df['close'].iloc[-2]
             atr_percent = (df[atr_col_name].iloc[-2] / last_close) * 100 if last_close > 0 else 0
             if atr_percent < min_atr_percent:
+                logger.debug(f"Skipping {symbol}: ATR percentage ({atr_percent:.2f}%) is too low.")
                 continue # تقلبات السعر منخفضة جدًا، تجاهل
 
             # --- فلتر الحجم النسبي (Relative Volume Filter) ---
             df['volume_sma'] = ta.sma(df['volume'], length=20)
             if pd.isna(df['volume_sma'].iloc[-2]) or df['volume_sma'].iloc[-2] == 0:
+                logger.debug(f"Skipping {symbol}: Volume SMA is not available or zero.")
                 continue
             rvol = df['volume'].iloc[-2] / df['volume_sma'].iloc[-2]
             if rvol < settings['liquidity_filters']['min_rvol']:
+                logger.debug(f"Skipping {symbol}: Relative Volume ({rvol:.2f}) is too low.")
                 continue # حجم التداول الحالي ليس قويًا بما فيه الكفاية
 
             # --- فلتر قوة الاتجاه (ADX Filter) ---
@@ -856,6 +857,7 @@ async def worker(queue, signals_list, errors_list):
                 adx_col = find_col(df.columns, "ADX_")
                 adx_value = df[adx_col].iloc[-2] if adx_col and pd.notna(df[adx_col].iloc[-2]) else 0
                 if adx_value < settings.get('adx_filter_level', 25):
+                    logger.debug(f"Skipping {symbol}: ADX value ({adx_value:.2f}) is too low.")
                     continue # الاتجاه الحالي ليس قويًا بما فيه الكفاية
 
             # --- تشغيل استراتيجيات التحليل (Scanners) ---
@@ -885,7 +887,7 @@ async def worker(queue, signals_list, errors_list):
                 signals_list.append({"symbol": symbol, "entry_price": entry_price, "take_profit": take_profit, "stop_loss": stop_loss, "reason": reason_str, "strength": strength})
 
         except Exception as e:
-            logger.debug(f"Worker error for {symbol}: {e}")
+            logger.error(f"Worker error for {symbol}: {e}")
             errors_list.append(symbol)
         finally:
             # ✅ **تصحيح مهم:** ضمان أن المهمة تُعلَّم كـ "منتهية" دائمًا
@@ -980,7 +982,7 @@ async def check_time_sync(context: ContextTypes.DEFAULT_TYPE):
 # =======================================================================================
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [["Dashboard 🖥️"], ["الإعدادات ⚙️"]]
-    await update.message.reply_text("أهلاً بك في **Binance Mastermind Trader v31.1 (Phoenix Edition)**", reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True), parse_mode=ParseMode.MARKDOWN)
+    await update.message.reply_text("أهلاً بك في **Binance Mastermind Trader v31.2 (Phoenix Edition)**", reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True), parse_mode=ParseMode.MARKDOWN)
 
 async def manual_scan_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not bot_data.trading_enabled: await (update.message or update.callback_query.message).reply_text("🔬 الفحص محظور. مفتاح الإيقاف مفعل."); return
@@ -1174,7 +1176,16 @@ async def show_stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
     profit_factor = sum(wins_data) / abs(sum(losses_data)) if sum(losses_data) != 0 else float('inf')
     message = (
         f"**📊 إحصائيات الأداء التفصيلية**\n\n"
-        f"**💰 إجمالي الربح/الخسارة الصافي:** `...`"
+        f"**💰 إجمالي الربح/الخسارة الصافي:** `{total_pnl:,.2f}`\n\n"
+        f"**📊 إحصائيات الصفقات:**\n"
+        f"  - إجمالي الصفقات المغلقة: {total_trades}\n"
+        f"  - عدد الصفقات الرابحة: {win_count}\n"
+        f"  - عدد الصفقات الخاسرة: {loss_count}\n"
+        f"  - معدل النجاح: {win_rate:.2f}%\n\n"
+        f"**📈 متوسطات الأداء:**\n"
+        f"  - متوسط الربح للصفقة الرابحة: `{avg_win:,.2f}`\n"
+        f"  - متوسط الخسارة للصفقة الخاسرة: `{avg_loss:,.2f}`\n"
+        f"  - عامل الربح (Profit Factor): `{profit_factor:,.2f}`\n"
     )
     await safe_edit_message(update.callback_query, message, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 العودة للوحة التحكم", callback_data="back_to_dashboard")]]))
 
@@ -1184,7 +1195,7 @@ async def show_portfolio_command(update: Update, context: ContextTypes.DEFAULT_T
         balance = await bot_data.exchange.fetch_balance() # Default is 'spot' for binance
         owned_assets = {asset: data['total'] for asset, data in balance.items() if isinstance(data, dict) and data.get('total', 0) > 0}
         usdt_balance = balance.get('USDT', {}); total_usdt_equity = usdt_balance.get('total', 0); free_usdt = usdt_balance.get('free', 0)
-        assets_to_fetch = [f"{asset}/USDT" for asset in owned_assets if asset != 'USDT']
+        assets_to_fetch = [f"{asset}/USDT" for asset in owned_assets if asset != 'USDT' and f"{asset}/USDT" in bot_data.exchange.markets]
         tickers = {}
         if assets_to_fetch:
             try: tickers = await bot_data.exchange.fetch_tickers(assets_to_fetch)
@@ -1441,7 +1452,9 @@ async def handle_setting_value(update: Update, context: ContextTypes.DEFAULT_TYP
             if symbol in blacklist: blacklist.remove(symbol); await update.message.reply_text(f"✅ تم إزالة `{symbol}` من القائمة السوداء.")
             else: await update.message.reply_text(f"⚠️ العملة `{symbol}` غير موجودة في القائمة.")
         bot_data.settings['asset_blacklist'] = blacklist; save_settings(); determine_active_preset()
-        await show_blacklist_menu(Update(update.update_id, callback_query=type('Query', (), {'message': update.message, 'data': 'settings_blacklist', 'edit_message_text': (lambda *args, **kwargs: None), 'answer': (lambda *args, **kwargs: None)})()), context); return
+        # The following lines are a workaround to call a callback handler from a message handler
+        new_callback_query = type('Query', (), {'message': update.message, 'data': 'settings_blacklist', 'edit_message_text': (lambda *args, **kwargs: None), 'answer': (lambda *args, **kwargs: None)})()
+        await button_callback_handler(Update(update.update_id, callback_query=new_callback_query), context); return
 
     if not (setting_key := context.user_data.get('setting_to_change')): return
 
@@ -1472,7 +1485,9 @@ async def handle_setting_value(update: Update, context: ContextTypes.DEFAULT_TYP
     finally:
         if 'setting_to_change' in context.user_data:
             del context.user_data['setting_to_change']
-        await show_parameters_menu(Update(update.update_id, callback_query=type('Query', (), {'message': update.message, 'data': 'settings_params', 'edit_message_text': (lambda *args, **kwargs: None), 'answer': (lambda *args, **kwargs: None)})()), context)
+        # The following lines are a workaround to call a callback handler from a message handler
+        new_callback_query = type('Query', (), {'message': update.message, 'data': 'settings_params', 'edit_message_text': (lambda *args, **kwargs: None), 'answer': (lambda *args, **kwargs: None)})()
+        await button_callback_handler(Update(update.update_id, callback_query=new_callback_query), context)
         
 async def universal_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if 'setting_to_change' in context.user_data or 'blacklist_action' in context.user_data:
@@ -1545,7 +1560,7 @@ async def post_init(application: Application):
     jq.run_repeating(check_time_sync, interval=TIME_SYNC_INTERVAL_SECONDS, first=TIME_SYNC_INTERVAL_SECONDS, name="time_sync_job")
     jq.run_daily(send_daily_report, time=dt_time(hour=23, minute=55, tzinfo=EGYPT_TZ), name='daily_report')
     logger.info(f"Jobs scheduled. Daily report at 23:55.")
-    try: await application.bot.send_message(TELEGRAM_CHAT_ID, "*🚀 Binance Mastermind Trader v31.1 (Phoenix Edition) بدأ العمل...*", parse_mode=ParseMode.MARKDOWN)
+    try: await application.bot.send_message(TELEGRAM_CHAT_ID, "*🚀 Binance Mastermind Trader v31.2 (Phoenix Edition) بدأ العمل...*", parse_mode=ParseMode.MARKDOWN)
     except Forbidden: logger.critical(f"FATAL: Bot not authorized for chat ID {TELEGRAM_CHAT_ID}."); return
     logger.info("--- Phoenix Engine (Binance Edition) is now fully operational ---")
 
@@ -1558,7 +1573,7 @@ async def post_shutdown(application: Application):
     logger.info("Bot has shut down.")
 
 def main():
-    logger.info("--- Starting Binance Mastermind Trader v31.1 (Phoenix Edition) ---")
+    logger.info("--- Starting Binance Mastermind Trader v31.2 (Phoenix Edition) ---")
     load_settings(); asyncio.run(init_database())
     app_builder = Application.builder().token(TELEGRAM_BOT_TOKEN)
     app_builder.post_init(post_init).post_shutdown(post_shutdown)
